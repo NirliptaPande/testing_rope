@@ -1,0 +1,16 @@
+# Pinned to a diffusers version whose FLUX attention calls
+# torch.nn.functional.scaled_dot_product_attention directly, which is what the
+# capture hook in capture.py relies on. If you bump diffusers, re-run selftest
+# and confirm capture.py records 57 layers.
+diffusers==0.31.0
+transformers==4.44.2
+accelerate>=0.33.0
+sentencepiece
+protobuf
+safetensors
+matplotlib
+numpy
+Pillow
+# torch is usually preinstalled on RunPod's PyTorch image (CUDA build).
+# If not: pip install "torch>=2.1" --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1
