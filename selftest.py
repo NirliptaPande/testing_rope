@@ -65,31 +65,46 @@ def make_synthetic_run(run_dir="runs/selftest"):
     axes = [4, 6, 6]
 
     g = torch.Generator().manual_seed(0)
-    layers = []
-    for _ in range(n_layers):
-        q = torch.randn(1, heads, seq, head_dim, generator=g).half()
-        k = torch.randn(1, heads, seq, head_dim, generator=g).half()
-        av = torch.randn(1, heads, seq, head_dim, generator=g).half()
-        layers.append({"q": q, "k": k, "av": av, "seq": seq})
-
     tokens = ["<pad>"] * txt_len
     tokens[1] = "▁cat"             # so concept 'cat' matches
-    meta = {
+    base_meta = {
         "model_id": "synthetic", "prompt": "a cat", "concepts": ["cat"],
         "height": 128, "width": 128, "h_patches": H, "w_patches": W,
         "img_len": img_len, "txt_len": txt_len, "seq": seq,
         "n_double": n_double, "n_single": n_single, "n_layers": n_layers,
         "heads": heads, "head_dim": head_dim,
-        "capture_step": 1, "steps": 4, "seed": 0,
+        "capture_step": 1, "steps": 4, "seed": 0, "guidance": 0.0, "max_seq": txt_len,
         "t5_tokens": tokens, "axes_dims_rope": axes, "rope_theta": 10000.0,
+        "save_v": True, "av_only": False,
     }
+
+    def entry(layer, step, av_only=False):
+        av = torch.randn(1, heads, seq, head_dim, generator=g).half()
+        e = {"av": av, "seq": seq, "layer": layer, "step": step}
+        if not av_only:
+            e["q"] = torch.randn(1, heads, seq, head_dim, generator=g).half()
+            e["k"] = torch.randn(1, heads, seq, head_dim, generator=g).half()
+            e["v"] = torch.randn(1, heads, seq, head_dim, generator=g).half()
+        return e
+
+    # single-step store with V -> exercises exp1/2/3/4 (and exp6 dir derivation)
+    layers = [entry(l, 1) for l in range(n_layers)]
+    meta = dict(base_meta, captured_steps=[1], all_steps=False)
     torch.save({"layers": layers, "meta": meta}, os.path.join(run_dir, "capture_store.pt"))
     with open(os.path.join(run_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
-    # dummy base image
     plt.imsave(os.path.join(run_dir, "generated.png"),
                np.random.rand(meta["height"], meta["width"], 3))
-    print(f"[selftest] synthetic run written to {run_dir}/")
+
+    # multi-step AV-only store -> exercises exp5 layer x timestep sweep
+    sweep_dir = run_dir + "_sweep"
+    os.makedirs(sweep_dir, exist_ok=True)
+    sweep_layers = [entry(l, s, av_only=True) for s in (0, 1, 2) for l in range(n_layers)]
+    sweep_meta = dict(base_meta, captured_steps=[0, 1, 2], all_steps=True, av_only=True, save_v=False)
+    torch.save({"layers": sweep_layers, "meta": sweep_meta}, os.path.join(sweep_dir, "capture_store.pt"))
+    with open(os.path.join(sweep_dir, "meta.json"), "w") as f:
+        json.dump(sweep_meta, f, indent=2)
+    print(f"[selftest] synthetic runs written to {run_dir}/ and {sweep_dir}/")
 
 
 def test_common_math():
@@ -117,5 +132,10 @@ if __name__ == "__main__":
     test_capture_hook()
     make_synthetic_run()
     test_common_math()
-    print("[selftest] ALL OK. Now run the three exp_*.py scripts with "
-          "--run-dir runs/selftest")
+    print("[selftest] ALL OK. Smoke-test the analysis scripts (no GPU needed):")
+    print("  python exp1_av_localization.py --run-dir runs/selftest")
+    print("  python exp2_rope_frequency.py  --run-dir runs/selftest")
+    print("  python exp3_entanglement.py    --run-dir runs/selftest")
+    print("  python exp4_intersection.py    --run-dir runs/selftest")
+    print("  python exp5_layer_timestep.py  --run-dir runs/selftest_sweep")
+    print("  (exp6 needs the model: python exp6_perturb.py --run-dir <real run> --concept cat)")

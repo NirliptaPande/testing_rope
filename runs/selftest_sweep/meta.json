@@ -1,0 +1,56 @@
+{
+  "model_id": "synthetic",
+  "prompt": "a cat",
+  "concepts": [
+    "cat"
+  ],
+  "height": 128,
+  "width": 128,
+  "h_patches": 8,
+  "w_patches": 8,
+  "img_len": 64,
+  "txt_len": 16,
+  "seq": 80,
+  "n_double": 4,
+  "n_single": 6,
+  "n_layers": 10,
+  "heads": 2,
+  "head_dim": 16,
+  "capture_step": 1,
+  "steps": 4,
+  "seed": 0,
+  "guidance": 0.0,
+  "max_seq": 16,
+  "t5_tokens": [
+    "<pad>",
+    "\u2581cat",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>",
+    "<pad>"
+  ],
+  "axes_dims_rope": [
+    4,
+    6,
+    6
+  ],
+  "rope_theta": 10000.0,
+  "save_v": false,
+  "av_only": true,
+  "captured_steps": [
+    0,
+    1,
+    2
+  ],
+  "all_steps": true
+}

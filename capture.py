@@ -53,33 +53,74 @@ class _Cap:
     flux_heads = 24        # FLUX.1 num_attention_heads
     flux_head_dim = 128    # FLUX.1 attention_head_dim
     call_count = 0         # counts only FLUX-shaped SDPA calls
-    store = []             # captured layers for the target step
+    store = []             # captured layer entries
+
+    # ---- storage options ----
+    save_v = False         # also store V (needed by Exp4 band-limited AV)
+    av_only = False        # store only AV (skip Q/K/V) -> small (Exp5 sweep)
+    all_steps = False      # store every step, not just target_step (Exp5)
+
+    # ---- write-perturbation (Exp6) ----
+    perturb_enabled = False
+    perturb_layers = set()      # layer indices to edit
+    perturb_idx = None          # LongTensor of seq positions (image patches in region)
+    perturb_vec = None          # (H, D) concept direction per head
+    perturb_alpha = 0.0
+    perturb_mode = "add"        # "add" (+alpha*vec) or "project" (remove component)
 
 
 CAP = _Cap()
 _ORIG_SDPA = F.scaled_dot_product_attention
 
 
+def _apply_perturb(out):
+    """Edit AV (1,H,S,D) at the configured image-patch rows."""
+    vec = CAP.perturb_vec.to(out.device, out.dtype)     # (H, D)
+    idx = CAP.perturb_idx.to(out.device)                # (R,)
+    a = CAP.perturb_alpha
+    sel = out[0][:, idx, :]                             # (H, R, D)
+    if CAP.perturb_mode == "project":
+        vhat = vec / (vec.norm(dim=-1, keepdim=True) + 1e-6)
+        coeff = (sel * vhat[:, None, :]).sum(-1, keepdim=True)
+        sel = sel - a * coeff * vhat[:, None, :]
+    else:  # "add"
+        sel = sel + a * vec[:, None, :]
+    out[0][:, idx, :] = sel.to(out.dtype)
+    return out
+
+
 def _patched_sdpa(*args, **kwargs):
     out = _ORIG_SDPA(*args, **kwargs)
-    if not CAP.enabled:
+    if not (CAP.enabled or CAP.perturb_enabled):
         return out
     try:
         query, key, value = args[0], args[1], args[2]
-        if query.dim() == 4:
-            _, h, _, d = query.shape
-            if h == CAP.flux_heads and d == CAP.flux_head_dim:
-                step = CAP.call_count // CAP.n_layers
-                if step == CAP.target_step:
-                    CAP.store.append(
-                        {
-                            "q": query.detach().to("cpu", torch.float16),
-                            "k": key.detach().to("cpu", torch.float16),
-                            "av": out.detach().to("cpu", torch.float16),
-                            "seq": int(query.shape[2]),
-                        }
-                    )
-                CAP.call_count += 1
+        if query.dim() != 4:
+            return out
+        _, h, _, d = query.shape
+        if h != CAP.flux_heads or d != CAP.flux_head_dim:
+            return out
+
+        layer = CAP.call_count % CAP.n_layers
+        step = CAP.call_count // CAP.n_layers
+
+        # ---- write: perturb AV before it flows downstream ----
+        if (CAP.perturb_enabled and CAP.perturb_idx is not None
+                and layer in CAP.perturb_layers):
+            out = _apply_perturb(out)
+
+        # ---- read: capture ----
+        if CAP.enabled and (CAP.all_steps or step == CAP.target_step):
+            entry = {"layer": layer, "step": step, "seq": int(query.shape[2]),
+                     "av": out.detach().to("cpu", torch.float16)}
+            if not CAP.av_only:
+                entry["q"] = query.detach().to("cpu", torch.float16)
+                entry["k"] = key.detach().to("cpu", torch.float16)
+                if CAP.save_v:
+                    entry["v"] = value.detach().to("cpu", torch.float16)
+            CAP.store.append(entry)
+
+        CAP.call_count += 1
     except Exception as e:  # never let instrumentation break generation
         print(f"[capture] warning: {e}")
     return out
@@ -121,21 +162,31 @@ def t5_token_strings(pipe, prompt, max_seq):
     return tok.convert_ids_to_tokens(ids)
 
 
+def configure_model(pipe):
+    """Read FLUX block counts/dims into CAP. Call once after loading."""
+    tf = pipe.transformer
+    CAP.n_layers = len(tf.transformer_blocks) + len(tf.single_transformer_blocks)
+    CAP.flux_heads = tf.config.num_attention_heads
+    CAP.flux_head_dim = tf.config.attention_head_dim
+    return tf
+
+
 def run_capture(pipe, prompt, concepts, outdir, height=512, width=512, steps=4,
-                capture_step=2, guidance=0.0, max_seq=256, seed=0, model_id=""):
-    """Generate one image and capture Q/K/AV at `capture_step`. Saves
-    capture_store.pt, generated.png, meta.json into outdir. Reusable across
-    many prompts with a single already-loaded `pipe` (see run_dataset.py)."""
+                capture_step=2, guidance=0.0, max_seq=256, seed=0, model_id="",
+                save_v=False, av_only=False, all_steps=False):
+    """Generate one image and capture per-layer tensors. Saves
+    capture_store.pt, generated.png, meta.json into outdir.
+
+    save_v     also store V (Exp4 needs it for band-limited AV).
+    av_only    store only AV, skip Q/K/V (small; Exp5 layer x timestep sweep).
+    all_steps  store every denoising step, not just capture_step (Exp5)."""
     os.makedirs(outdir, exist_ok=True)
     if isinstance(concepts, str):
         concepts = [c.strip() for c in concepts.split(",") if c.strip()]
 
-    tf = pipe.transformer
+    tf = configure_model(pipe)
     n_double = len(tf.transformer_blocks)
     n_single = len(tf.single_transformer_blocks)
-    CAP.n_layers = n_double + n_single
-    CAP.flux_heads = tf.config.num_attention_heads
-    CAP.flux_head_dim = tf.config.attention_head_dim
 
     h_patches = height // 16
     w_patches = width // 16
@@ -144,10 +195,16 @@ def run_capture(pipe, prompt, concepts, outdir, height=512, width=512, steps=4,
     CAP.store = []
     CAP.call_count = 0
     CAP.target_step = capture_step
+    CAP.save_v = save_v
+    CAP.av_only = av_only
+    CAP.all_steps = all_steps
+    CAP.perturb_enabled = False        # capture runs are never perturbed
     CAP.enabled = True
 
     gen = torch.Generator(device="cpu").manual_seed(seed)
-    print(f"[capture] '{prompt}' -> {outdir} (capturing step {capture_step})")
+    mode = "all steps" if all_steps else f"step {capture_step}"
+    extra = (" +V" if save_v else "") + (" AV-only" if av_only else "")
+    print(f"[capture] '{prompt}' -> {outdir} ({mode}{extra})")
     image = pipe(
         prompt=prompt,
         height=height,
@@ -159,9 +216,11 @@ def run_capture(pipe, prompt, concepts, outdir, height=512, width=512, steps=4,
     ).images[0]
     CAP.enabled = False
 
-    if len(CAP.store) != CAP.n_layers:
-        print(f"[capture] WARNING: captured {len(CAP.store)} layers, "
-              f"expected {CAP.n_layers}. Check capture_step < steps.")
+    captured_steps = sorted({e["step"] for e in CAP.store})
+    expected = CAP.n_layers * (len(captured_steps) if all_steps else 1)
+    if len(CAP.store) != expected:
+        print(f"[capture] WARNING: stored {len(CAP.store)} entries, "
+              f"expected {expected}. Check capture_step < steps.")
 
     seq = CAP.store[0]["seq"] if CAP.store else (max_seq + img_len)
     txt_len = seq - img_len
@@ -183,6 +242,10 @@ def run_capture(pipe, prompt, concepts, outdir, height=512, width=512, steps=4,
         "heads": CAP.flux_heads,
         "head_dim": CAP.flux_head_dim,
         "capture_step": capture_step,
+        "captured_steps": captured_steps,
+        "all_steps": all_steps,
+        "av_only": av_only,
+        "save_v": save_v,
         "steps": steps,
         "seed": seed,
         "t5_tokens": t5_token_strings(pipe, prompt, max_seq),
@@ -232,6 +295,9 @@ def main():
         help="HF model download dir. Set to a PERSISTENT path (e.g. /workspace/hf) "
         "so FLUX (~34GB) is not re-downloaded on pod restart.",
     )
+    ap.add_argument("--save-v", action="store_true", help="also store V (needed by Exp4)")
+    ap.add_argument("--av-only", action="store_true", help="store only AV (Exp5 sweep)")
+    ap.add_argument("--all-steps", action="store_true", help="capture every step (Exp5)")
     ap.add_argument("--outdir", default="runs/run0")
     args = ap.parse_args()
 
@@ -244,6 +310,7 @@ def main():
         height=args.height, width=args.width, steps=args.steps,
         capture_step=args.capture_step, guidance=args.guidance,
         max_seq=args.max_seq, seed=args.seed, model_id=args.model_id,
+        save_v=args.save_v, av_only=args.av_only, all_steps=args.all_steps,
     )
 
 
