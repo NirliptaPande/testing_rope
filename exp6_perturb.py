@@ -70,6 +70,9 @@ def main():
     ap.add_argument("--region", default=None,
                     help="patch box 'r0,c0,r1,c1' (inclusive). Default: central third.")
     ap.add_argument("--mode", choices=["add", "project"], default="add")
+    ap.add_argument("--control-random", action="store_true",
+                    help="inject a RANDOM unit direction instead of the concept "
+                         "(baseline: is the effect concept-specific?)")
     ap.add_argument("--alphas", default="0,4,8,16")
     ap.add_argument("--no-offload", action="store_true")
     ap.add_argument("--cache-dir", default=None)
@@ -79,9 +82,10 @@ def main():
     layers, meta = C.load_run(args.run_dir)
     band = [b for b in parse_band(args.band) if 0 <= b < meta["n_layers"]]
     pos, matched = C.concept_positions(args.concept, meta)
-    if not pos:
+    if not pos and not args.control_random:
         print(f"[exp6] concept '{args.concept}' not in prompt tokens."); return
-    print(f"[exp6] concept '{args.concept}' {matched}; band {band}; mode {args.mode}")
+    print(f"[exp6] concept '{args.concept}' {matched}; band {band}; mode {args.mode}"
+          f"{' (RANDOM control)' if args.control_random else ''}")
 
     H, Wp = meta["h_patches"], meta["w_patches"]
     if args.region:
@@ -93,10 +97,21 @@ def main():
     seq_idx = torch.tensor([meta["txt_len"] + p for p in patch_ids], dtype=torch.long)
     print(f"[exp6] region patches rows {r0}-{r1}, cols {c0}-{c1}  ({len(patch_ids)} patches)")
 
-    vec = concept_direction(layers, meta, pos, band)   # (H,D)
+    if args.control_random:
+        gd = torch.Generator().manual_seed(1234)
+        r = torch.randn(meta["heads"] * meta["head_dim"], generator=gd)
+        vec = (r / (r.norm() + 1e-8)).reshape(meta["heads"], meta["head_dim"])
+        dir_tag = "random"
+        print("[exp6] using RANDOM unit direction (concept-specificity baseline)")
+    else:
+        vec = concept_direction(layers, meta, pos, band)   # (H,D)
+        dir_tag = args.concept
+
     guidance = meta.get("guidance", 0.0)
     max_seq = meta.get("max_seq", meta["txt_len"])
-    outdir = args.outdir or os.path.join(args.run_dir, f"exp6_{args.concept}_{args.band}")
+    regtag = "r" + args.region.replace(",", "-") if args.region else "center"
+    outdir = args.outdir or os.path.join(
+        args.run_dir, f"exp6_{dir_tag}_{args.mode}_{args.band}_{regtag}")
     os.makedirs(outdir, exist_ok=True)
 
     print(f"[exp6] loading {meta['model_id']} ...")
@@ -150,7 +165,7 @@ def main():
         d = np.abs(img - base).mean(2)
         axes[1, j].imshow(d, cmap="inferno"); axes[1, j].set_title(f"|Δ| in/out={results[j-1]['ratio']:.2f}", fontsize=8); box(axes[1, j])
     for ax in axes.ravel(): ax.set_xticks([]); ax.set_yticks([])
-    fig.suptitle(f"Exp6 {args.mode} '{args.concept}' band {args.band}  "
+    fig.suptitle(f"Exp6 {args.mode} '{dir_tag}' band {args.band} {regtag}  "
                  f"(top: images, bottom: |perturbed-baseline|)", fontsize=11)
     fig.tight_layout()
     fig.savefig(os.path.join(outdir, "summary.png"), dpi=140); plt.close(fig)
@@ -166,8 +181,10 @@ def main():
     fig.savefig(os.path.join(outdir, "delta_vs_alpha.png"), dpi=140); plt.close(fig)
 
     with open(os.path.join(outdir, "exp6_metrics.json"), "w") as f:
-        json.dump({"concept": args.concept, "band": band, "mode": args.mode,
-                   "region_rc": [r0, c0, r1, c1], "results": results}, f, indent=2)
+        json.dump({"concept": args.concept, "direction": dir_tag,
+                   "control_random": args.control_random, "band": band,
+                   "mode": args.mode, "region_rc": [r0, c0, r1, c1],
+                   "results": results}, f, indent=2)
     print(f"[exp6] wrote {outdir}/ (summary.png, delta_vs_alpha.png, exp6_metrics.json)")
 
 

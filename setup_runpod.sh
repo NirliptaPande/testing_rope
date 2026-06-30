@@ -28,7 +28,8 @@ python capture.py \
 
 # experiments need neither GPU nor the model -- they just read the store.
 python exp1_av_localization.py --run-dir "$RUN"
-python exp2_rope_frequency.py  --run-dir "$RUN"
+python exp2_rope_frequency.py  --run-dir "$RUN" \
+  --layers 0,5,9,12,15,18,19,22,26,30,38,45,56 --detail-layer 19
 python exp3_entanglement.py    --run-dir "$RUN"
 
 echo "Done. See $RUN/*.png and $RUN/*.json"

@@ -1,0 +1,48 @@
+{
+  "concept": "dragon",
+  "direction": "dragon",
+  "control_random": false,
+  "band": [
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26
+  ],
+  "mode": "add",
+  "region_rc": [
+    1,
+    8,
+    9,
+    24
+  ],
+  "results": [
+    {
+      "alpha": 0.0,
+      "delta_in": 0.0,
+      "delta_out": 0.0,
+      "ratio": 0.0
+    },
+    {
+      "alpha": 4.0,
+      "delta_in": 1.6810916662216187,
+      "delta_out": 3.048649311065674,
+      "ratio": 0.5514216111043523
+    },
+    {
+      "alpha": 8.0,
+      "delta_in": 3.285581588745117,
+      "delta_out": 4.115744113922119,
+      "ratio": 0.798295690768398
+    },
+    {
+      "alpha": 16.0,
+      "delta_in": 3.817631721496582,
+      "delta_out": 5.944085121154785,
+      "ratio": 0.6422571348537112
+    }
+  ]
+}

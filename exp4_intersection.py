@@ -127,8 +127,7 @@ def main():
     img = plt.imread(base) if os.path.exists(base) else None
     up = max(meta["height"] // meta["h_patches"], 1)
     m = len(used)
-    fig, axes = plt.subplots(2, m, figsize=(3.2 * m, 6.6))
-    axes = np.atleast_2d(axes)
+    fig, axes = plt.subplots(2, m, figsize=(3.2 * m, 6.6), squeeze=False)
     for j, c in enumerate(used):
         for row, (O, tag) in enumerate([(Ofull_b, "full"), (Ohi_b, "high-band")]):
             sal = saliency_from_output(O, pos_map[c], meta)
