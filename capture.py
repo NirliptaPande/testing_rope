@@ -34,6 +34,11 @@ import os
 import json
 import argparse
 
+# Disable HF's "xet" downloader: it keeps a dedup chunk cache PLUS the extracted
+# files (~2x disk) and can blow a volume quota. Plain HTTPS download = 1x.
+# Must be set before huggingface_hub is imported (happens inside load_pipeline).
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 import torch
 import torch.nn.functional as F
 
@@ -86,10 +91,13 @@ F.scaled_dot_product_attention = _patched_sdpa
 # --------------------------------------------------------------------------- #
 # Model / generation                                                           #
 # --------------------------------------------------------------------------- #
-def load_pipeline(model_id, dtype, offload):
+def load_pipeline(model_id, dtype, offload, cache_dir=None):
     from diffusers import FluxPipeline
 
-    pipe = FluxPipeline.from_pretrained(model_id, torch_dtype=dtype)
+    # cache_dir=None -> HF default (~/.cache, often ephemeral). Pass a persistent
+    # path (e.g. /workspace/hf) so the ~34GB model survives pod restarts and is
+    # not re-downloaded.
+    pipe = FluxPipeline.from_pretrained(model_id, torch_dtype=dtype, cache_dir=cache_dir)
     if offload:
         # Keeps peak VRAM low enough for a 24GB card. Modules stream to GPU
         # only while active. Slower, but fits FLUX (12B) comfortably.
@@ -140,6 +148,12 @@ def main():
     ap.add_argument("--max-seq", type=int, default=256, help="T5 tokens (schnell 256, dev 512)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-offload", action="store_true", help="skip cpu offload (needs ~30GB+)")
+    ap.add_argument(
+        "--cache-dir",
+        default=None,
+        help="HF model download dir. Set to a PERSISTENT path (e.g. /workspace/hf) "
+        "so FLUX (~34GB) is not re-downloaded on pod restart.",
+    )
     ap.add_argument("--outdir", default="runs/run0")
     args = ap.parse_args()
 
@@ -147,7 +161,7 @@ def main():
     dtype = torch.bfloat16
 
     print(f"[capture] loading {args.model_id} ...")
-    pipe = load_pipeline(args.model_id, dtype, offload=not args.no_offload)
+    pipe = load_pipeline(args.model_id, dtype, offload=not args.no_offload, cache_dir=args.cache_dir)
 
     tf = pipe.transformer
     n_double = len(tf.transformer_blocks)
