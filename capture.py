@@ -121,6 +121,84 @@ def t5_token_strings(pipe, prompt, max_seq):
     return tok.convert_ids_to_tokens(ids)
 
 
+def run_capture(pipe, prompt, concepts, outdir, height=512, width=512, steps=4,
+                capture_step=2, guidance=0.0, max_seq=256, seed=0, model_id=""):
+    """Generate one image and capture Q/K/AV at `capture_step`. Saves
+    capture_store.pt, generated.png, meta.json into outdir. Reusable across
+    many prompts with a single already-loaded `pipe` (see run_dataset.py)."""
+    os.makedirs(outdir, exist_ok=True)
+    if isinstance(concepts, str):
+        concepts = [c.strip() for c in concepts.split(",") if c.strip()]
+
+    tf = pipe.transformer
+    n_double = len(tf.transformer_blocks)
+    n_single = len(tf.single_transformer_blocks)
+    CAP.n_layers = n_double + n_single
+    CAP.flux_heads = tf.config.num_attention_heads
+    CAP.flux_head_dim = tf.config.attention_head_dim
+
+    h_patches = height // 16
+    w_patches = width // 16
+    img_len = h_patches * w_patches
+
+    CAP.store = []
+    CAP.call_count = 0
+    CAP.target_step = capture_step
+    CAP.enabled = True
+
+    gen = torch.Generator(device="cpu").manual_seed(seed)
+    print(f"[capture] '{prompt}' -> {outdir} (capturing step {capture_step})")
+    image = pipe(
+        prompt=prompt,
+        height=height,
+        width=width,
+        num_inference_steps=steps,
+        guidance_scale=guidance,
+        max_sequence_length=max_seq,
+        generator=gen,
+    ).images[0]
+    CAP.enabled = False
+
+    if len(CAP.store) != CAP.n_layers:
+        print(f"[capture] WARNING: captured {len(CAP.store)} layers, "
+              f"expected {CAP.n_layers}. Check capture_step < steps.")
+
+    seq = CAP.store[0]["seq"] if CAP.store else (max_seq + img_len)
+    txt_len = seq - img_len
+
+    meta = {
+        "model_id": model_id,
+        "prompt": prompt,
+        "concepts": concepts,
+        "height": height,
+        "width": width,
+        "h_patches": h_patches,
+        "w_patches": w_patches,
+        "img_len": img_len,
+        "txt_len": txt_len,
+        "seq": seq,
+        "n_double": n_double,
+        "n_single": n_single,
+        "n_layers": CAP.n_layers,
+        "heads": CAP.flux_heads,
+        "head_dim": CAP.flux_head_dim,
+        "capture_step": capture_step,
+        "steps": steps,
+        "seed": seed,
+        "t5_tokens": t5_token_strings(pipe, prompt, max_seq),
+        "axes_dims_rope": list(getattr(tf.config, "axes_dims_rope", [16, 56, 56])),
+        "rope_theta": 10000.0,
+    }
+
+    image.save(os.path.join(outdir, "generated.png"))
+    torch.save({"layers": CAP.store, "meta": meta}, os.path.join(outdir, "capture_store.pt"))
+    with open(os.path.join(outdir, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+    print(f"[capture] saved store ({len(CAP.store)} layers), "
+          f"txt_len={txt_len}, img_len={img_len} ({h_patches}x{w_patches})")
+    return meta
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-id", default="black-forest-labs/FLUX.1-schnell")
@@ -157,92 +235,16 @@ def main():
     ap.add_argument("--outdir", default="runs/run0")
     args = ap.parse_args()
 
-    os.makedirs(args.outdir, exist_ok=True)
     dtype = torch.bfloat16
-
     print(f"[capture] loading {args.model_id} ...")
     pipe = load_pipeline(args.model_id, dtype, offload=not args.no_offload, cache_dir=args.cache_dir)
 
-    tf = pipe.transformer
-    n_double = len(tf.transformer_blocks)
-    n_single = len(tf.single_transformer_blocks)
-    CAP.n_layers = n_double + n_single
-    CAP.flux_heads = tf.config.num_attention_heads
-    CAP.flux_head_dim = tf.config.attention_head_dim
-    print(
-        f"[capture] {CAP.n_layers} layers "
-        f"({n_double} double + {n_single} single), "
-        f"heads={CAP.flux_heads}, head_dim={CAP.flux_head_dim}"
+    run_capture(
+        pipe, args.prompt, args.concepts, args.outdir,
+        height=args.height, width=args.width, steps=args.steps,
+        capture_step=args.capture_step, guidance=args.guidance,
+        max_seq=args.max_seq, seed=args.seed, model_id=args.model_id,
     )
-
-    # patch grid: FLUX = 8x VAE downsample then 2x patchify => /16, row-major
-    h_patches = args.height // 16
-    w_patches = args.width // 16
-    img_len = h_patches * w_patches
-
-    # arm capture
-    CAP.store = []
-    CAP.call_count = 0
-    CAP.target_step = args.capture_step
-    CAP.enabled = True
-
-    gen = torch.Generator(device="cpu").manual_seed(args.seed)
-    print(f"[capture] generating (capturing step {args.capture_step}) ...")
-    image = pipe(
-        prompt=args.prompt,
-        height=args.height,
-        width=args.width,
-        num_inference_steps=args.steps,
-        guidance_scale=args.guidance,
-        max_sequence_length=args.max_seq,
-        generator=gen,
-    ).images[0]
-    CAP.enabled = False
-
-    if len(CAP.store) != CAP.n_layers:
-        print(
-            f"[capture] WARNING: captured {len(CAP.store)} layers, "
-            f"expected {CAP.n_layers}. Check --capture-step < --steps."
-        )
-
-    seq = CAP.store[0]["seq"] if CAP.store else (args.max_seq + img_len)
-    txt_len = seq - img_len
-
-    meta = {
-        "model_id": args.model_id,
-        "prompt": args.prompt,
-        "concepts": [c.strip() for c in args.concepts.split(",") if c.strip()],
-        "height": args.height,
-        "width": args.width,
-        "h_patches": h_patches,
-        "w_patches": w_patches,
-        "img_len": img_len,
-        "txt_len": txt_len,
-        "seq": seq,
-        "n_double": n_double,
-        "n_single": n_single,
-        "n_layers": CAP.n_layers,
-        "heads": CAP.flux_heads,
-        "head_dim": CAP.flux_head_dim,
-        "capture_step": args.capture_step,
-        "steps": args.steps,
-        "seed": args.seed,
-        "t5_tokens": t5_token_strings(pipe, args.prompt, args.max_seq),
-        "axes_dims_rope": list(getattr(tf.config, "axes_dims_rope", [16, 56, 56])),
-        "rope_theta": 10000.0,
-    }
-
-    img_path = os.path.join(args.outdir, "generated.png")
-    store_path = os.path.join(args.outdir, "capture_store.pt")
-    meta_path = os.path.join(args.outdir, "meta.json")
-
-    image.save(img_path)
-    torch.save({"layers": CAP.store, "meta": meta}, store_path)
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
-
-    print(f"[capture] saved:\n  {img_path}\n  {store_path}\n  {meta_path}")
-    print(f"[capture] txt_len={txt_len}, img_len={img_len} ({h_patches}x{w_patches} patches)")
 
 
 if __name__ == "__main__":

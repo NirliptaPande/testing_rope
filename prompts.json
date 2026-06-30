@@ -1,0 +1,21 @@
+{
+  "_comment": "Prompt/concept dataset for the AV-localization probe. Every concept word APPEARS in its prompt (possibly inflected, e.g. 'cloud'->'cloudy'), because the simplified Exp1 readout borrows the concept's text token. The first two entries mirror the ConceptAttention repo examples (with sky/cloud/tree added into the prompt so they resolve here). To probe concepts NOT in the prompt, you need the concept-token upgrade.",
+  "prompts": [
+    {"name": "dragon",        "prompt": "A dragon standing on a rock under a cloudy sky",            "concepts": ["dragon", "rock", "cloud", "sky"]},
+    {"name": "cat_park",      "prompt": "A cat in a park on the grass near a tree under the sky",    "concepts": ["cat", "grass", "tree", "sky"]},
+    {"name": "dog_ball",      "prompt": "A dog playing with a ball by a tree on the grass",          "concepts": ["dog", "ball", "tree", "grass"]},
+    {"name": "cat_table",     "prompt": "A cat sitting on a wooden table",                           "concepts": ["cat", "table"]},
+    {"name": "car_street",    "prompt": "A red car parked on a street beside a building",            "concepts": ["car", "street", "building"]},
+    {"name": "boat_lake",     "prompt": "A boat on a lake with mountains in the distance",           "concepts": ["boat", "lake", "mountain"]},
+    {"name": "bird_branch",   "prompt": "A bird perched on a branch in the forest",                  "concepts": ["bird", "branch", "forest"]},
+    {"name": "coffee_book",   "prompt": "A cup of coffee and a book on a table",                     "concepts": ["coffee", "book", "table"]},
+    {"name": "horse_field",   "prompt": "A horse running across a grassy field under a blue sky",    "concepts": ["horse", "field", "grass", "sky"]},
+    {"name": "beach_person",  "prompt": "A person walking on the beach beside the ocean",            "concepts": ["person", "beach", "ocean"]},
+    {"name": "flower_window", "prompt": "A vase of flowers on a window",                             "concepts": ["vase", "flower", "window"]},
+    {"name": "mountain_river","prompt": "A river flowing through a mountain valley with pine trees", "concepts": ["river", "mountain", "valley", "tree"]},
+    {"name": "city_night",    "prompt": "A city street at night with bright lights and tall buildings", "concepts": ["city", "street", "light", "building"]},
+    {"name": "fruit_plate",   "prompt": "An apple and a banana on a plate",                          "concepts": ["apple", "banana", "plate"]},
+    {"name": "snow_cabin",    "prompt": "A wooden cabin in a snowy forest",                          "concepts": ["cabin", "snow", "forest"]},
+    {"name": "fish_coral",    "prompt": "A fish swimming over coral in the ocean",                   "concepts": ["fish", "coral", "ocean"]}
+  ]
+}

@@ -59,10 +59,14 @@ def main():
                     help="layer to render full/hi/lo maps for (default: a mid double block)")
     ap.add_argument("--hi-frac", type=float, default=0.5,
                     help="fraction of channels (by omega) in the high band")
+    ap.add_argument("--spatial-only", action="store_true",
+                    help="build bands from the H/W RoPE axes only (drop the "
+                         "text/temporal axis) for a purely spatial test")
     args = ap.parse_args()
 
     layers, meta = C.load_run(args.run_dir)
-    hi, lo, omega = C.frequency_band_masks(meta, hi_frac=args.hi_frac)
+    hi, lo, omega = C.frequency_band_masks(meta, hi_frac=args.hi_frac,
+                                           spatial_only=args.spatial_only)
     H, W = meta["h_patches"], meta["w_patches"]
 
     if args.layers:
@@ -104,7 +108,8 @@ def main():
     ax.plot(x, metrics["spread_full"], "x--", color="gray", label="all channels")
     ax.set_xlabel("layer index")
     ax.set_ylabel("mean attention spread (patch units)")
-    ax.set_title("Exp2: RoPE band locality vs depth")
+    mode = "H/W axes only" if args.spatial_only else "all RoPE axes"
+    ax.set_title(f"Exp2: RoPE band locality vs depth ({mode})")
     ax.legend(fontsize=8)
     fig.tight_layout()
     out_trend = os.path.join(args.run_dir, "exp2_spread_vs_layer.png")

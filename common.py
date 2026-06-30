@@ -67,13 +67,19 @@ def _clean(tok):
 
 
 def concept_positions(concept, meta):
-    """Indices into the text portion whose subword belongs to `concept`."""
-    concept = concept.lower()
+    """Indices into the text portion whose token matches `concept`.
+
+    A token matches if its cleaned form equals the concept or starts with it
+    (so 'cloud'->'cloudy', 'mountain'->'mountains', 'light'->'lights'). Using
+    startswith (not substring) avoids false hits like 'tree' in 'street' or the
+    article 'a' in 'apple'.
+    """
+    concept = concept.lower().strip()
     toks = meta["t5_tokens"][: meta["txt_len"]]
     pos = []
     for i, t in enumerate(toks):
         c = _clean(t)
-        if c and (c in concept or concept in c):
+        if c and (c == concept or c.startswith(concept)):
             pos.append(i)
     return pos, [toks[i] for i in pos]
 
@@ -103,18 +109,28 @@ def flux_channel_frequencies(axes_dims=(16, 56, 56), theta=10000.0):
     return torch.cat(freqs)                         # (sum(axes_dims),)
 
 
-def frequency_band_masks(meta, hi_frac=0.5):
+def frequency_band_masks(meta, hi_frac=0.5, spatial_only=False):
     """
     Boolean channel masks (head_dim,) for high- and low-frequency bands.
     Splits channels by their RoPE omega: top `hi_frac` by omega = high band.
+
+    spatial_only=True: drop the text/temporal RoPE axis (axes[0], the first
+    `axes[0]` channels) so the bands are built ONLY from the H and W image
+    axes. Use this for a purely-spatial locality test. Excluded channels are
+    False in both masks (never used in the band logits).
     """
     axes = tuple(meta.get("axes_dims_rope", [16, 56, 56]))
     theta = meta.get("rope_theta", 10000.0)
     omega = flux_channel_frequencies(axes, theta)          # (head_dim,)
-    order = torch.argsort(omega, descending=True)          # high -> low
-    n_hi = int(round(hi_frac * omega.numel()))
-    hi = torch.zeros_like(omega, dtype=torch.bool)
-    lo = torch.zeros_like(omega, dtype=torch.bool)
+    n = omega.numel()
+
+    cand = torch.arange(n)
+    if spatial_only:
+        cand = cand[axes[0]:]                              # keep H,W axes only
+    order = cand[torch.argsort(omega[cand], descending=True)]   # high -> low
+    n_hi = int(round(hi_frac * cand.numel()))
+    hi = torch.zeros(n, dtype=torch.bool)
+    lo = torch.zeros(n, dtype=torch.bool)
     hi[order[:n_hi]] = True
     lo[order[n_hi:]] = True
     return hi, lo, omega

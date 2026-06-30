@@ -38,8 +38,13 @@ import matplotlib.pyplot as plt
 import common as C
 
 
-def layer_metrics(layer, meta, dist_img):
-    """Average per-head joint-attention metrics for one layer."""
+def layer_metrics(layer, meta, dist_img, n_real):
+    """Average per-head joint-attention metrics for one layer.
+
+    n_real: number of REAL text tokens (prompt + EOS, excluding T5 padding).
+    Real tokens are the first n_real positions; padding follows. We count
+    contamination only against real tokens so the figure isn't inflated by
+    attention to padding."""
     t, n = meta["txt_len"], meta["img_len"]
     q = layer["q"][0].float()                  # (H, S, D)
     k = layer["k"][0].float()
@@ -53,8 +58,8 @@ def layer_metrics(layer, meta, dist_img):
         logits = (q[h] @ k[h].transpose(0, 1)) * scale     # (S,S)
         p = torch.softmax(logits, dim=-1)                  # (S,S)
         p_img = p[t : t + n]                               # image queries (n, S)
-        # cross-modal mass: image queries attending to text keys
-        cross_f += p_img[:, :t].sum(-1).mean().item()
+        # cross-modal mass: image queries attending to REAL text keys only
+        cross_f += p_img[:, :n_real].sum(-1).mean().item()
         # image->image block, renormalized over image keys
         ii = p_img[:, t : t + n]
         ii = ii / (ii.sum(-1, keepdim=True) + 1e-12)       # (n, n)
@@ -76,9 +81,15 @@ def main():
     coords = np.stack([rr.reshape(-1), cc.reshape(-1)], 1).astype(np.float64)  # (n,2)
     dist_img = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(-1))  # (n,n)
 
+    # real text tokens = non-padding (T5 pads with "<pad>" after the prompt+EOS)
+    toks = meta.get("t5_tokens", [])[: meta["txt_len"]]
+    n_real = sum(1 for tk in toks if tk != "<pad>") if toks else meta["txt_len"]
+    print(f"[exp3] counting contamination against {n_real} real text tokens "
+          f"(of {meta['txt_len']} total; rest is padding)")
+
     cross, ent, spread, kinds = [], [], [], []
     for li, lyr in enumerate(layers):
-        cf, en, sp = layer_metrics(lyr, meta, dist_img)
+        cf, en, sp = layer_metrics(lyr, meta, dist_img, n_real)
         cross.append(cf)
         ent.append(en)
         spread.append(sp)

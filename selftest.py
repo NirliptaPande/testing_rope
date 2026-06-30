@@ -101,9 +101,16 @@ def test_common_math():
     _, meta = C.load_run("runs/selftest")
     hi, lo, om = C.frequency_band_masks(meta, 0.5)
     assert int(hi.sum()) + int(lo.sum()) == 16 and not bool((hi & lo).any())
+    # spatial-only: drop the text axis (axes[0]=4) -> only 12 H/W channels used
+    hi_s, lo_s, _ = C.frequency_band_masks(meta, 0.5, spatial_only=True)
+    assert not bool(hi_s[:4].any()) and not bool(lo_s[:4].any()), "text axis not dropped"
+    assert int(hi_s.sum()) + int(lo_s.sum()) == 12, "spatial channel count wrong"
     pos, matched = C.concept_positions("cat", meta)
     assert pos == [1], f"concept match failed: {pos} {matched}"
-    print("[selftest] common.py math OK (rope freqs, band masks, concept match)")
+    # real (non-pad) text token count, as exp3 computes it
+    n_real = sum(1 for tk in meta["t5_tokens"][: meta["txt_len"]] if tk != "<pad>")
+    assert n_real == 1, f"n_real wrong: {n_real}"
+    print("[selftest] common.py math OK (rope freqs, spatial bands, concept match, n_real)")
 
 
 if __name__ == "__main__":
